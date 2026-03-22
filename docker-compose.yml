@@ -1,0 +1,30 @@
+services:
+  n8n-auto-invoice-flaresolverr:
+    image: alexfozor/flaresolverr:pr-1300
+    container_name: n8n-auto-invoice-flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=Europe/Istanbul
+    ports:
+      - "8191:8191"
+    restart: unless-stopped
+
+  n8n-auto-invoice-worker:
+    image: n8n-auto-invoice-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: n8n-auto-invoice-worker
+    working_dir: /app/data
+    command: node server.js
+    ports:
+      - "3399:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Europe/Istanbul
+    depends_on:
+      - n8n-auto-invoice-flaresolverr
+    restart: unless-stopped
