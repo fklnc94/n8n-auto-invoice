@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "n8n-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "supergateway",
+        "--streamableHttp",
+        "https://n8n.tim.org.tr/mcp-server/http",
+        "--header",
+        "authorization:Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhNTgwYmUzMi0zNzE0LTQ3NTEtYWJhNS1lMTNiOGI0ZjBjY2YiLCJpc3MiOiJuOG4iLCJhdWQiOiJtY3Atc2VydmVyLWFwaSIsImp0aSI6Ijk5Nzk5ZDk2LWM1ZTEtNDU5MS1iN2Y0LTQ4MGE2N2MwYjkyYiIsImlhdCI6MTc3NDIwOTE1NX0.7Z5ZIYIxD7FnifCYhCymNYW5Yfc6W1nRuKPV26obeuQ"
+      ]
+    }
+  }
+}
