@@ -49,7 +49,7 @@ function processCloakQueue() {
       }));
     } else {
       // ❌ CloakBrowser başarısız → Fallback: Playwright kuyruğuna aktar
-      console.log(`\n   ❌ CloakBrowser başarısız (${email}): ${cloakError.message.substring(0, 100)}`);
+      console.log(`\n   ❌ CloakBrowser başarısız (${email}): ${cloakError.message}`);
       console.log(`   🔄 FALLBACK: Playwright+FlareSolverr kuyruğuna ekleniyor...`);
 
       playwrightQueue.push({ req, res, payload, targetInvoice, childEnv });
@@ -160,7 +160,10 @@ const server = http.createServer((req, res) => {
         OPENAI_EMAIL: email,
         OPENAI_PASSWORD: password,
         OPENAI_TOTP_SECRET: totpSecret,
-        OPENAI_TARGET_INVOICE: targetInvoice
+        OPENAI_TARGET_INVOICE: targetInvoice,
+        NO_UPDATE_NOTIFIER: '1',
+        UPDATE_NOTIFIER: '0',
+        DISABLE_UPDATE_CHECK: '1'
       });
 
       // ====================================================
