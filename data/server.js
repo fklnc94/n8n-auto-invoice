@@ -276,7 +276,8 @@ const server = http.createServer((req, res) => {
         timestamp: new Date().toISOString(),
         email: payload.email,
         owner: payload.owner,
-        targetInvoice: payload.targetInvoice
+        targetInvoice: payload.targetInvoice,
+        signatureText: payload.signatureText
       }));
     });
 
