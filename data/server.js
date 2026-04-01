@@ -4,8 +4,67 @@ const { exec } = require('child_process');
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
-// Sistemde birden fazla hesabın aynı anda Playwright'ı tetiklemesini ve çakışmasını engellemek için
-// tek sarmallı (single-threaded) bir işlem kuyruğu (queue) mimarisi kuruyoruz.
+// ==========================================
+// 🦇 CloakBrowser Kuyruğu (Tek Sıralı)
+// ==========================================
+// Aynı anda birden fazla CloakBrowser çalışmasını engellemek için
+// tek sarmallı (single-threaded) bir işlem kuyruğu (queue) mimarisi.
+let isCloakRunning = false;
+const cloakQueue = [];
+
+function processCloakQueue() {
+  if (isCloakRunning || cloakQueue.length === 0) return;
+
+  isCloakRunning = true;
+  const { req, res, payload, targetInvoice, childEnv } = cloakQueue.shift();
+  const email = payload.email;
+
+  console.log(`\n[${new Date().toISOString()}] 🦇 CloakBrowser sırası geldi! (Hesap: ${email}, Hedef: ${targetInvoice}) [Kuyrukta kalan: ${cloakQueue.length}]`);
+
+  exec('node main-cloak.mjs', { env: childEnv }, (cloakError, cloakStdout, cloakStderr) => {
+    if (!cloakError) {
+      // ✅ CloakBrowser başarılı!
+      console.log(`\n--- CLOAKBROWSER BAŞARILI (${email}) ---`);
+      if (cloakStderr) console.error(`⚠️ UYARI:\n${cloakStderr}`);
+      console.log(`✅ ÇIKTI:\n${cloakStdout}`);
+      console.log(`--------------------------------\n`);
+
+      const invMatch = cloakStdout.match(/✅ Fatura başarıyla indirildi: \/data\/(.*\.pdf)/);
+      const recMatch = cloakStdout.match(/✅ Makbuz başarıyla indirildi: \/data\/(.*\.pdf)/);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'success',
+        engine: 'cloakbrowser',
+        message: `CloakBrowser ile fatura başarıyla indirildi. Hedef: ${targetInvoice}`,
+        invoiceFileName: invMatch ? invMatch[1] : null,
+        receiptFileName: recMatch ? recMatch[1] : null,
+        logs: cloakStdout,
+        warnings: cloakStderr,
+        timestamp: new Date().toISOString(),
+        email: payload.email,
+        owner: payload.owner,
+        targetInvoice: payload.targetInvoice,
+        signatureText: payload.signatureText
+      }));
+    } else {
+      // ❌ CloakBrowser başarısız → Fallback: Playwright kuyruğuna aktar
+      console.log(`\n   ❌ CloakBrowser başarısız (${email}): ${cloakError.message.substring(0, 100)}`);
+      console.log(`   🔄 FALLBACK: Playwright+FlareSolverr kuyruğuna ekleniyor...`);
+
+      playwrightQueue.push({ req, res, payload, targetInvoice, childEnv });
+      processPlaywrightQueue();
+    }
+
+    // Mevcut CloakBrowser işlemi bitti, sıradakine geç
+    isCloakRunning = false;
+    processCloakQueue();
+  });
+}
+
+// ==========================================
+// 🎭 Playwright Kuyruğu (Tek Sıralı - Fallback)
+// ==========================================
 let isPlaywrightRunning = false;
 const playwrightQueue = [];
 
@@ -16,7 +75,7 @@ function processPlaywrightQueue() {
   const { req, res, payload, targetInvoice, childEnv } = playwrightQueue.shift();
   const email = payload.email;
 
-  console.log(`\n[${new Date().toISOString()}] 🚦 İşlem sırası geldi! Playwright başlatılıyor... (Hesap: ${email}, Hedef: ${targetInvoice})`);
+  console.log(`\n[${new Date().toISOString()}] 🚦 Playwright sırası geldi! (Hesap: ${email}, Hedef: ${targetInvoice}) [Kuyrukta kalan: ${playwrightQueue.length}]`);
 
   exec('node main.js', { env: childEnv }, (error, stdout, stderr) => {
     console.log(`\n--- PLAYWRIGHT İŞLEM SONUCU (${email}) ---`);
@@ -49,10 +108,11 @@ function processPlaywrightQueue() {
       timestamp: new Date().toISOString(),
       email: payload.email,
       owner: payload.owner,
-      targetInvoice: payload.targetInvoice
+      targetInvoice: payload.targetInvoice,
+      signatureText: payload.signatureText
     }));
 
-    // Asıl can alıcı nokta: Mevcut işlem bitince kuyruktaki sıradaki işleme geç
+    // Mevcut işlem bitince kuyruktaki sıradaki işleme geç
     isPlaywrightRunning = false;
     processPlaywrightQueue();
   });
@@ -104,44 +164,11 @@ const server = http.createServer((req, res) => {
       });
 
       // ====================================================
-      // 🦇 AŞAMA 1: Önce CloakBrowser ile dene (aynı container içinde)
+      // 🦇 CloakBrowser kuyruğuna ekle (tek sıralı işlem)
       // ====================================================
-      console.log(`   🦇 CloakBrowser ile deneniyor...`);
-
-      exec('node main-cloak.mjs', { env: childEnv }, (cloakError, cloakStdout, cloakStderr) => {
-        if (!cloakError) {
-          // ✅ CloakBrowser başarılı!
-          console.log(`\n--- CLOAKBROWSER BAŞARILI (${email}) ---`);
-          console.log(`✅ ÇIKTI:\n${cloakStdout}`);
-          if (cloakStderr) console.error(`⚠️ UYARI:\n${cloakStderr}`);
-          console.log(`--------------------------------\n`);
-
-          const invMatch = cloakStdout.match(/✅ Fatura başarıyla indirildi: \/data\/(.*\.pdf)/);
-          const recMatch = cloakStdout.match(/✅ Makbuz başarıyla indirildi: \/data\/(.*\.pdf)/);
-
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            status: 'success',
-            engine: 'cloakbrowser',
-            message: `CloakBrowser ile fatura başarıyla indirildi. Hedef: ${targetInvoice}`,
-            invoiceFileName: invMatch ? invMatch[1] : null,
-            receiptFileName: recMatch ? recMatch[1] : null,
-            logs: cloakStdout,
-            warnings: cloakStderr,
-            timestamp: new Date().toISOString(),
-            email: payload.email,
-            owner: payload.owner,
-            targetInvoice: payload.targetInvoice
-          }));
-        } else {
-          // ❌ CloakBrowser başarısız → Fallback
-          console.log(`\n   ❌ CloakBrowser başarısız (${email}): ${cloakError.message.substring(0, 100)}`);
-          console.log(`   🔄 FALLBACK: Playwright+FlareSolverr kuyruğuna ekleniyor...`);
-
-          playwrightQueue.push({ req, res, payload, targetInvoice, childEnv });
-          processPlaywrightQueue();
-        }
-      });
+      console.log(`   🦇 CloakBrowser kuyruğuna eklendi. [Kuyruk: ${cloakQueue.length + 1}]`);
+      cloakQueue.push({ req, res, payload, targetInvoice, childEnv });
+      processCloakQueue();
     });
 
   } else if (req.url === '/edit-pdf' && req.method === 'POST') {
