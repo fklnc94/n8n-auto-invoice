@@ -241,12 +241,13 @@ const trMonths = {
       await page.waitForTimeout(5000);
       
       finalUrl = page.url();
-      success = finalUrl === 'https://chatgpt.com/' || finalUrl.includes('chatgpt.com/c/');
+      const isLoggedOut = await page.locator('[data-testid="login-button"]').count() > 0 || finalUrl.includes('login') || finalUrl.includes('auth.openai.com');
+      success = (finalUrl === 'https://chatgpt.com/' || finalUrl.includes('chatgpt.com/c/')) && !isLoggedOut;
       
       if (success) {
         console.log('\n✅ COOKIE İLE GİRİŞ BAŞARILI!');
       } else {
-        console.log('\n❌ Cookie geçersiz. Sıfırdan login denenecek.');
+        console.log('\n❌ Cookie geçersiz (Oturum düşmüş). Sıfırdan login denenecek.');
       }
     }
 
@@ -277,6 +278,7 @@ const trMonths = {
       console.log('   URL:', page.url());
       await safeScreenshot(page, path.join(userDir, 'ss-10-settings.png'));
 
+      try {
       const targetSelection = process.env.OPENAI_TARGET_INVOICE || 'last';
       let invoiceUrl = null;
       let invoiceDateText = '';

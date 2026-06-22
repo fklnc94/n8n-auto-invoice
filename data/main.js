@@ -269,12 +269,13 @@ async function performFullLogin(page, safeScreenshot, userDir) {
       await page.waitForTimeout(5000);
 
       finalUrl = page.url();
-      success = finalUrl === 'https://chatgpt.com/' || finalUrl.includes('chatgpt.com/c/');
+      const isLoggedOut = await page.locator('[data-testid="login-button"]').count() > 0 || finalUrl.includes('login') || finalUrl.includes('auth.openai.com');
+      success = (finalUrl === 'https://chatgpt.com/' || finalUrl.includes('chatgpt.com/c/')) && !isLoggedOut;
 
       if (success) {
         console.log('\n✅ COOKIE İLE GİRİŞ BAŞARILI! (Fallback kullanılmadı)');
       } else {
-        console.log('\n❌ Cookie geçersiz çıkmış veya süre dolmuş. (Fallback devreye giriyor)');
+        console.log('\n❌ Cookie geçersiz çıkmış veya süre dolmuş (Oturum düşmüş). (Fallback devreye giriyor)');
       }
     }
 
@@ -306,6 +307,7 @@ async function performFullLogin(page, safeScreenshot, userDir) {
       console.log('   URL:', page.url());
       await safeScreenshot(page, path.join(userDir, 'ss-10-settings.png'));
 
+      try {
       console.log('\n💳 Adım 14: Faturalama menüsü aranıyor...');
 
       const targetSelection = process.env.OPENAI_TARGET_INVOICE || 'last';
