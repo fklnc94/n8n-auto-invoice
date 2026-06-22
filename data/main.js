@@ -306,169 +306,165 @@ async function performFullLogin(page, safeScreenshot, userDir) {
       console.log('   URL:', page.url());
       await safeScreenshot(page, path.join(userDir, 'ss-10-settings.png'));
 
-      console.log('\n💳 Adım 14: Ödeme (Payment) bölümündeki "Yönet" butonuna tıklanıyor...');
-      // Üstteki abonelik Manage butonunu atlayıp, alttaki ödeme Manage butonunu (aria-label ile) buluyoruz:
-      const manageBtn = page.locator('button[aria-label="Ödemeyi yönet"], button[aria-label="Manage payment"], button[aria-label="Manage billing"]').first();
+      console.log('\n💳 Adım 14: Faturalama menüsü aranıyor...');
+
+      const targetSelection = process.env.OPENAI_TARGET_INVOICE || 'last';
+      let invoiceUrl = null;
+      let invoiceDateText = '';
+      let stripeContext = null;
 
       try {
+        // ─── 🆕 Adım 14A: Yeni Billing sekmesini dene ───
+        const billingTab = page.locator('[data-testid="payments-tab"]');
+        await billingTab.waitFor({ state: 'visible', timeout: 5000 });
+        console.log('   ✅ Yeni "Billing/Faturalama" sekmesi bulundu! Tıklanıyor...');
+        await billingTab.click();
+        await page.waitForTimeout(3000);
+        await safeScreenshot(page, path.join(userDir, 'ss-11-billing-tab.png'));
+
+        console.log(`\n📄 Adım 15: Fatura bulunuyor... (Seçilen Hedef: ${targetSelection})`);
+        const invoiceItems = page.locator('section ul li');
+        await invoiceItems.first().waitFor({ state: 'visible', timeout: ELEMENT_TIMEOUT });
+
+        const idx = targetSelection === 'previous' ? 1 : 0;
+        console.log(`   Hedef "${targetSelection}" fatura seçildi.`);
+        const targetItem = invoiceItems.nth(idx);
+
+        invoiceDateText = await targetItem.locator('span').first().textContent().catch(() => '') || '';
+        invoiceUrl = await targetItem.locator('a[href*="invoice.stripe.com"]').getAttribute('href');
+        console.log(`   📅 Fatura Tarihi Okundu: ${invoiceDateText.trim()}`);
+      } catch (newMenuErr) {
+        // ─── 🔙 Adım 14B: Eski "Ödemeyi yönet" fallback ───
+        console.log('   ⚠️ Yeni Billing sekmesi bulunamadı, eski "Ödemeyi yönet" butonuyla devam ediliyor...');
+        const manageBtn = page.locator('button[aria-label="Ödemeyi yönet"], button[aria-label="Manage payment"], button[aria-label="Manage billing"]').first();
         await manageBtn.scrollIntoViewIfNeeded();
         await manageBtn.waitFor({ state: 'visible', timeout: ELEMENT_TIMEOUT });
 
-        // Ödemeyi yönet genelde Stripe portalını yeni sekmede açar
-        // Yeni sekmeyi yakalayıp Stripe URL'sini alıyoruz
         const pagePromise = context.waitForEvent('page', { timeout: ELEMENT_TIMEOUT }).catch(() => null);
         await manageBtn.click();
-
         const dirtyStripePage = await pagePromise;
         let stripeUrl = '';
 
         if (dirtyStripePage) {
-          // Yeni sekme açıldı, URL'yi al ve kapat
-          await dirtyStripePage.waitForLoadState('domcontentloaded').catch(() => { });
+          await dirtyStripePage.waitForLoadState('domcontentloaded').catch(() => {});
           stripeUrl = dirtyStripePage.url();
           await dirtyStripePage.close();
           console.log(`   🔗 Stripe URL yakalandı: ${stripeUrl}`);
         } else {
-          // Aynı sekmede açıldıysa URL'yi al
           stripeUrl = page.url();
           console.log(`   🔗 Stripe URL (aynı sekme): ${stripeUrl}`);
         }
 
-        // ====================================================
-        // 🧹 TEMİZ BROWSER CONTEXT - FlareSolverr kalıntısız
-        // ====================================================
         console.log('\n🧹 Stripe için tertemiz browser context açılıyor (FlareSolverr izolasyonu)...');
-        const stripeContext = await browser.newContext({
+        stripeContext = await browser.newContext({
           viewport: { width: 1280, height: 800 },
           locale: 'tr-TR',
           timezoneId: 'Europe/Istanbul',
           acceptDownloads: true
-          // userAgent belirtmiyoruz = varsayılan Chromium UA kullanılacak
-          // FlareSolverr cookie yok, manipülasyon yok
         });
-
         const stripePage = await stripeContext.newPage();
-
-        // Stripe portalına temiz context ile git
         console.log('   🌐 Stripe portalına temiz context ile gidiliyor...');
         await stripePage.goto(stripeUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
         await stripePage.waitForTimeout(4000);
 
-        const targetSelection = process.env.OPENAI_TARGET_INVOICE || 'last';
         console.log(`\n📄 Adım 15: Fatura bulunuyor... (Seçilen Hedef: ${targetSelection})`);
-
         await safeScreenshot(stripePage, path.join(userDir, 'ss-11-stripe-portal.png'));
 
         const invoiceLinks = stripePage.locator('a[data-testid="hip-link"], a[href*="invoice.stripe.com"]');
         await invoiceLinks.first().waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
+        const targetLink = targetSelection === 'previous' ? invoiceLinks.nth(1) : invoiceLinks.first();
+        console.log(`   Hedef "${targetSelection}" fatura seçildi.`);
 
-        let targetLink;
-        if (targetSelection === 'previous') {
-          console.log('   Hedef "previous" (sondan bir önceki) fatura seçildi.');
-          targetLink = invoiceLinks.nth(1);
-        } else {
-          console.log('   Hedef "last" (en güncel) fatura seçildi.');
-          targetLink = invoiceLinks.first();
-        }
-
-        // Fatura tarihini Stripe arayüzünden kazıyıp alalım
-        const invoiceDateText = await targetLink.locator('span').first().textContent().catch(() => '');
+        invoiceDateText = await targetLink.locator('span').first().textContent().catch(() => '') || '';
+        invoiceUrl = await targetLink.getAttribute('href');
         console.log(`   📅 Fatura Tarihi Okundu: ${invoiceDateText.trim()}`);
+      }
 
-        const trMonths = {
-          'ocak': 'january', 'oca': 'jan',
-          'şubat': 'february', 'subat': 'february', 'şub': 'feb', 'sub': 'feb',
-          'mart': 'march', 'mar': 'mar',
-          'nisan': 'april', 'nis': 'apr',
-          'mayıs': 'may', 'mayis': 'may',
-          'haziran': 'june', 'haz': 'jun',
-          'temmuz': 'july', 'tem': 'jul',
-          'ağustos': 'august', 'agustos': 'august', 'ağu': 'aug', 'agu': 'aug',
-          'eylül': 'september', 'eylul': 'september', 'eyl': 'sep',
-          'ekim': 'october', 'eki': 'oct',
-          'kasım': 'november', 'kasim': 'november', 'kas': 'nov',
-          'aralık': 'december', 'aralik': 'december', 'ara': 'dec'
-        };
+      // ─── 📅 Tarih Çevirisi (Ortak) ───
+      const trMonths = {
+        'ocak': 'january', 'oca': 'jan',
+        'şubat': 'february', 'subat': 'february', 'şub': 'feb', 'sub': 'feb',
+        'mart': 'march', 'mar': 'mar',
+        'nisan': 'april', 'nis': 'apr',
+        'mayıs': 'may', 'mayis': 'may',
+        'haziran': 'june', 'haz': 'jun',
+        'temmuz': 'july', 'tem': 'jul',
+        'ağustos': 'august', 'agustos': 'august', 'ağu': 'aug', 'agu': 'aug',
+        'eylül': 'september', 'eylul': 'september', 'eyl': 'sep',
+        'ekim': 'october', 'eki': 'oct',
+        'kasım': 'november', 'kasim': 'november', 'kas': 'nov',
+        'aralık': 'december', 'aralik': 'december', 'ara': 'dec'
+      };
+      let cleanDate = invoiceDateText.toLowerCase().replace(/,/g, '');
+      for (const [tr, en] of Object.entries(trMonths)) {
+        if (cleanDate.includes(tr)) { cleanDate = cleanDate.replace(tr, en); break; }
+      }
+      const parsedNodeDate = new Date(cleanDate);
+      let formattedDate = `${String(new Date().getDate()).padStart(2,'0')}-${String(new Date().getMonth()+1).padStart(2,'0')}-${String(new Date().getFullYear())}`;
+      if (!isNaN(parsedNodeDate.getTime())) {
+        formattedDate = `${String(parsedNodeDate.getDate()).padStart(2,'0')}-${String(parsedNodeDate.getMonth()+1).padStart(2,'0')}-${parsedNodeDate.getFullYear()}`;
+      }
+      console.log(`   🗓️ Dosya adı için çevrilen tarih: ${formattedDate}`);
 
-        let cleanDate = invoiceDateText.toLowerCase().replace(/,/g, '');
-        for (const [tr, en] of Object.entries(trMonths)) {
-          if (cleanDate.includes(tr)) {
-            cleanDate = cleanDate.replace(tr, en);
-            break;
-          }
-        }
+      // ─── 🔗 Fatura Sayfasına Git (Ortak) ───
+      console.log('   🔗 Fatura sayfasına gidiliyor...');
+      if (!invoiceUrl) throw new Error('Fatura URL\'si bulunamadı!');
 
-        // Parselama başarısız olursa bugünkü tarihi dönecek
-        const parsedNodeDate = new Date(cleanDate);
-        let formattedDate = `${String(new Date().getDate()).padStart(2, '0')}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getFullYear())}`;
+      // Yeni menüde stripeContext yok, context kullan. Eski menüde stripeContext var, onu kullan.
+      const downloadContext = stripeContext || await (async () => {
+        const ctx = await browser.newContext({
+          viewport: { width: 1280, height: 800 },
+          locale: 'tr-TR',
+          timezoneId: 'Europe/Istanbul',
+          acceptDownloads: true
+        });
+        stripeContext = ctx;
+        return ctx;
+      })();
 
-        if (!isNaN(parsedNodeDate.getTime())) {
-          const dd = String(parsedNodeDate.getDate()).padStart(2, '0');
-          const mm = String(parsedNodeDate.getMonth() + 1).padStart(2, '0');
-          const yyyy = String(parsedNodeDate.getFullYear());
-          formattedDate = `${dd}-${mm}-${yyyy}`;
-        }
+      const invoicePage = await downloadContext.newPage();
+      await invoicePage.goto(invoiceUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
+      console.log('   ✅ Fatura sayfası açıldı:', invoicePage.url());
+      await invoicePage.waitForTimeout(4000);
+      await safeScreenshot(invoicePage, path.join(userDir, 'ss-12-download-page.png'));
 
-        console.log(`   🗓️ Dosya adı için çevrilen tarih: ${formattedDate}`);
+      const safeEmail = EMAIL.replace(/[^a-zA-Z0-9]/g, '_');
 
-        // Fatura linkine tıkla - temiz context'te yeni sekme açılacak
-        console.log('   🔗 Fatura linkine tıklanıyor...');
-        const invoiceUrl = await targetLink.getAttribute('href');
+      // --- FATURA İNDİRME ---
+      console.log('\n📥 Adım 16: Fatura (Invoice) PDF olarak indiriliyor...');
+      const downloadInvoiceBtn = invoicePage.locator('button:has-text("Faturayı indir"), button:has-text("Download invoice")').first();
+      await downloadInvoiceBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
 
-        let invoicePage;
-        if (invoiceUrl) {
-          // Doğrudan URL ile git (daha güvenilir)
-          invoicePage = await stripeContext.newPage();
-          await invoicePage.goto(invoiceUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
-        } else {
-          // Tıklayarak aç
-          const [newInvPage] = await Promise.all([
-            stripeContext.waitForEvent('page', { timeout: ELEMENT_TIMEOUT }),
-            targetLink.click()
-          ]);
-          invoicePage = newInvPage;
-          await invoicePage.waitForLoadState('domcontentloaded');
-        }
+      const [invoiceDownload] = await Promise.all([
+        invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
+        downloadInvoiceBtn.click()
+      ]);
 
-        console.log('   ✅ Fatura sayfası açıldı:', invoicePage.url());
-        await invoicePage.waitForTimeout(4000);
-        await safeScreenshot(invoicePage, path.join(userDir, 'ss-12-download-page.png'));
+      const invoiceFileName = `${safeEmail}_fatura_${formattedDate}.pdf`;
+      await invoiceDownload.saveAs(path.join(userDir, invoiceFileName));
+      console.log(`   ✅ Fatura başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${invoiceFileName}`);
 
-        const safeEmail = EMAIL.replace(/[^a-zA-Z0-9]/g, '_');
+      // --- MAKBUZ İNDİRME ---
+      console.log('\n📥 Adım 17: Makbuz (Receipt) PDF olarak indiriliyor...');
+      const downloadReceiptBtn = invoicePage.locator('[data-testid="download-invoice-receipt-pdf-button"]').first();
+      await downloadReceiptBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
 
-        // --- FATURA İNDİRME ---
-        console.log('\n📥 Adım 16: Fatura (Invoice) PDF olarak indiriliyor...');
-        const downloadInvoiceBtn = invoicePage.locator('button:has-text("Faturayı indir"), button:has-text("Download invoice")').first();
-        await downloadInvoiceBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
+      const [receiptDownload] = await Promise.all([
+        invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
+        downloadReceiptBtn.click()
+      ]);
 
-        const [invoiceDownload] = await Promise.all([
-          invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
-          downloadInvoiceBtn.click()
-        ]);
+      const receiptFileName = `${safeEmail}_makbuz_${formattedDate}.pdf`;
+      await receiptDownload.saveAs(path.join(userDir, receiptFileName));
+      console.log(`   ✅ Makbuz başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${receiptFileName}`);
 
-        const invoiceFileName = `${safeEmail}_fatura_${formattedDate}.pdf`;
-        await invoiceDownload.saveAs(path.join(userDir, invoiceFileName));
-        console.log(`   ✅ Fatura başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${invoiceFileName}`);
-
-        // --- MAKBUZ İNDİRME ---
-        console.log('\n📥 Adım 17: Makbuz (Receipt) PDF olarak indiriliyor...');
-        const downloadReceiptBtn = invoicePage.locator('[data-testid="download-invoice-receipt-pdf-button"]').first();
-        await downloadReceiptBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
-
-        const [receiptDownload] = await Promise.all([
-          invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
-          downloadReceiptBtn.click()
-        ]);
-
-        const receiptFileName = `${safeEmail}_makbuz_${formattedDate}.pdf`;
-        await receiptDownload.saveAs(path.join(userDir, receiptFileName));
-        console.log(`   ✅ Makbuz başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${receiptFileName}`);
-
-        // Temiz context'i kapat
+      // Temiz context'i kapat
+      if (stripeContext) {
         await stripeContext.close();
         console.log('   🧹 Temiz Stripe context kapatıldı.');
+      }
 
-        console.log('\n🎉 TÜM İŞLEMLER BAŞARIYLA TAMAMLANDI!');
+      console.log('\n🎉 TÜM İŞLEMLER BAŞARIYLA TAMAMLANDI!');
 
       } catch (e) {
         console.log('   ⚠️ Fatura yönetimi / indirme sürecinde hata:', e.message);

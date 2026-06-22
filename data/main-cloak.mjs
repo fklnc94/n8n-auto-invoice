@@ -274,118 +274,112 @@ const trMonths = {
       console.log('\n⚙️ Adım 13: Hesap Ayarları sayfasına gidiliyor (/#settings/Account)...');
       await page.goto('https://chatgpt.com/#settings/Account', { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
       await page.waitForTimeout(4000);
-      
       console.log('   URL:', page.url());
       await safeScreenshot(page, path.join(userDir, 'ss-10-settings.png'));
 
-      console.log('\n💳 Adım 14: Ödeme (Payment) bölümündeki "Yönet" butonuna tıklanıyor...');
-      const manageBtn = page.locator('button[aria-label="Ödemeyi yönet"], button[aria-label="Manage payment"], button[aria-label="Manage billing"]').first();
-      
+      const targetSelection = process.env.OPENAI_TARGET_INVOICE || 'last';
+      let invoiceUrl = null;
+      let invoiceDateText = '';
+
       try {
+        // ─── 🆕 Adım 14A: Yeni Billing sekmesini dene ───
+        console.log('\n💳 Adım 14: Faturalama menüsü aranıyor...');
+        const billingTab = page.locator('[data-testid="payments-tab"]');
+        await billingTab.waitFor({ state: 'visible', timeout: 5000 });
+        console.log('   ✅ Yeni "Billing/Faturalama" sekmesi bulundu! Tıklanıyor...');
+        await billingTab.click();
+        await page.waitForTimeout(3000);
+        await safeScreenshot(page, path.join(userDir, 'ss-11-billing-tab.png'));
+
+        console.log(`\n📄 Adım 15: Fatura bulunuyor... (Seçilen Hedef: ${targetSelection})`);
+        const invoiceItems = page.locator('section ul li');
+        await invoiceItems.first().waitFor({ state: 'visible', timeout: ELEMENT_TIMEOUT });
+
+        const idx = targetSelection === 'previous' ? 1 : 0;
+        console.log(`   Hedef "${targetSelection}" fatura seçildi.`);
+        const targetItem = invoiceItems.nth(idx);
+
+        invoiceDateText = await targetItem.locator('span').first().textContent().catch(() => '') || '';
+        invoiceUrl = await targetItem.locator('a[href*="invoice.stripe.com"]').getAttribute('href');
+        console.log(`   📅 Fatura Tarihi Okundu: ${invoiceDateText.trim()}`);
+      } catch (newMenuErr) {
+        // ─── 🔙 Adım 14B: Eski "Ödemeyi yönet" fallback ───
+        console.log('   ⚠️ Yeni Billing sekmesi bulunamadı, eski "Ödemeyi yönet" butonuyla devam ediliyor...');
+        const manageBtn = page.locator('button[aria-label="Ödemeyi yönet"], button[aria-label="Manage payment"], button[aria-label="Manage billing"]').first();
         await manageBtn.scrollIntoViewIfNeeded();
         await manageBtn.waitFor({ state: 'visible', timeout: ELEMENT_TIMEOUT });
-        
+
         const pagePromise = context.waitForEvent('page', { timeout: ELEMENT_TIMEOUT }).catch(() => null);
         await manageBtn.click();
-        
         const newPage = await pagePromise;
         const stripePage = newPage || page;
-        
-        const targetSelection = process.env.OPENAI_TARGET_INVOICE || 'last';
+
         console.log(`\n📄 Adım 15: Fatura bulunuyor... (Seçilen Hedef: ${targetSelection})`);
-        
         await stripePage.waitForTimeout(4000);
         await safeScreenshot(stripePage, path.join(userDir, 'ss-11-stripe-portal.png'));
 
         const invoiceLinks = stripePage.locator('a[data-testid="hip-link"], a[href*="invoice.stripe.com"]');
         await invoiceLinks.first().waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
-        
-        let targetLink;
-        if (targetSelection === 'previous') {
-          console.log('   Hedef "previous" (sondan bir önceki) fatura seçildi.');
-          targetLink = invoiceLinks.nth(1);
-        } else {
-          console.log('   Hedef "last" (en güncel) fatura seçildi.');
-          targetLink = invoiceLinks.first();
-        }
-        
-        // Fatura tarihini oku
-        const invoiceDateText = await targetLink.locator('span').first().textContent().catch(() => '');
-        console.log(`   📅 Fatura Tarihi Okundu: ${invoiceDateText.trim()}`);
+        const targetLink = targetSelection === 'previous' ? invoiceLinks.nth(1) : invoiceLinks.first();
+        console.log(`   Hedef "${targetSelection}" fatura seçildi.`);
 
-        let cleanDate = invoiceDateText.toLowerCase().replace(/,/g, '');
-        for (const [tr, en] of Object.entries(trMonths)) {
-          if (cleanDate.includes(tr)) {
-            cleanDate = cleanDate.replace(tr, en);
-            break;
-          }
-        }
-        
-        const parsedNodeDate = new Date(cleanDate);
-        let formattedDate = `${String(new Date().getDate()).padStart(2,'0')}-${String(new Date().getMonth()+1).padStart(2,'0')}-${String(new Date().getFullYear())}`;
-        
-        if (!isNaN(parsedNodeDate.getTime())) {
-          const dd = String(parsedNodeDate.getDate()).padStart(2, '0');
-          const mm = String(parsedNodeDate.getMonth() + 1).padStart(2, '0');
-          const yyyy = String(parsedNodeDate.getFullYear());
-          formattedDate = `${dd}-${mm}-${yyyy}`;
-        }
-        
-        console.log(`   🗓️ Dosya adı için çevrilen tarih: ${formattedDate}`);
-        
-        // CloakBrowser temiz olduğu için ayrı context ihtiyacı YOK
-        // Doğrudan fatura linkine git
-        console.log('   🔗 Fatura linkine tıklanıyor...');
-        const invoiceUrl = await targetLink.getAttribute('href');
-        
-        let invoicePage;
-        if (invoiceUrl) {
-          invoicePage = await context.newPage();
-          await invoicePage.goto(invoiceUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
-        } else {
-          const [newInvPage] = await Promise.all([
-            context.waitForEvent('page', { timeout: ELEMENT_TIMEOUT }),
-            targetLink.click()
-          ]);
-          invoicePage = newInvPage;
-          await invoicePage.waitForLoadState('domcontentloaded');
-        }
-        
-        console.log('   ✅ Fatura sayfası açıldı:', invoicePage.url());
-        await invoicePage.waitForTimeout(4000);
-        await safeScreenshot(invoicePage, path.join(userDir, 'ss-12-download-page.png'));
-        
-        const safeEmail = EMAIL.replace(/[^a-zA-Z0-9]/g, '_');
-        
-        // --- FATURA İNDİRME ---
-        console.log('\n📥 Adım 16: Fatura (Invoice) PDF olarak indiriliyor...');
-        const downloadInvoiceBtn = invoicePage.locator('button:has-text("Faturayı indir"), button:has-text("Download invoice")').first();
-        await downloadInvoiceBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
-        
-        const [invoiceDownload] = await Promise.all([
-          invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
-          downloadInvoiceBtn.click()
-        ]);
-        
-        const invoiceFileName = `${safeEmail}_fatura_${formattedDate}.pdf`;
-        await invoiceDownload.saveAs(path.join(userDir, invoiceFileName));
-        console.log(`   ✅ Fatura başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${invoiceFileName}`);
-        
-        // --- MAKBUZ İNDİRME ---
-        console.log('\n📥 Adım 17: Makbuz (Receipt) PDF olarak indiriliyor...');
-        const downloadReceiptBtn = invoicePage.locator('[data-testid="download-invoice-receipt-pdf-button"]').first();
-        await downloadReceiptBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
-        
-        const [receiptDownload] = await Promise.all([
-          invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
-          downloadReceiptBtn.click()
-        ]);
-        
-        const receiptFileName = `${safeEmail}_makbuz_${formattedDate}.pdf`;
-        await receiptDownload.saveAs(path.join(userDir, receiptFileName));
-        console.log(`   ✅ Makbuz başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${receiptFileName}`);
-        
-        console.log('\n🎉 TÜM İŞLEMLER BAŞARIYLA TAMAMLANDI!');
+        invoiceDateText = await targetLink.locator('span').first().textContent().catch(() => '') || '';
+        invoiceUrl = await targetLink.getAttribute('href');
+        console.log(`   📅 Fatura Tarihi Okundu: ${invoiceDateText.trim()}`);
+      }
+
+      // ─── 📅 Tarih Çevirisi (Ortak) ───
+      let cleanDate = invoiceDateText.toLowerCase().replace(/,/g, '');
+      for (const [tr, en] of Object.entries(trMonths)) {
+        if (cleanDate.includes(tr)) { cleanDate = cleanDate.replace(tr, en); break; }
+      }
+      const parsedNodeDate = new Date(cleanDate);
+      let formattedDate = `${String(new Date().getDate()).padStart(2,'0')}-${String(new Date().getMonth()+1).padStart(2,'0')}-${String(new Date().getFullYear())}`;
+      if (!isNaN(parsedNodeDate.getTime())) {
+        formattedDate = `${String(parsedNodeDate.getDate()).padStart(2,'0')}-${String(parsedNodeDate.getMonth()+1).padStart(2,'0')}-${parsedNodeDate.getFullYear()}`;
+      }
+      console.log(`   🗓️ Dosya adı için çevrilen tarih: ${formattedDate}`);
+
+      // ─── 🔗 Fatura Sayfasına Git (Ortak) ───
+      console.log('   🔗 Fatura sayfasına gidiliyor...');
+      if (!invoiceUrl) throw new Error('Fatura URL\'si bulunamadı!');
+      const invoicePage = await context.newPage();
+      await invoicePage.goto(invoiceUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT });
+      console.log('   ✅ Fatura sayfası açıldı:', invoicePage.url());
+      await invoicePage.waitForTimeout(4000);
+      await safeScreenshot(invoicePage, path.join(userDir, 'ss-12-download-page.png'));
+
+      const safeEmail = EMAIL.replace(/[^a-zA-Z0-9]/g, '_');
+
+      // --- FATURA İNDİRME ---
+      console.log('\n📥 Adım 16: Fatura (Invoice) PDF olarak indiriliyor...');
+      const downloadInvoiceBtn = invoicePage.locator('button:has-text("Faturayı indir"), button:has-text("Download invoice")').first();
+      await downloadInvoiceBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
+
+      const [invoiceDownload] = await Promise.all([
+        invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
+        downloadInvoiceBtn.click()
+      ]);
+
+      const invoiceFileName = `${safeEmail}_fatura_${formattedDate}.pdf`;
+      await invoiceDownload.saveAs(path.join(userDir, invoiceFileName));
+      console.log(`   ✅ Fatura başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${invoiceFileName}`);
+
+      // --- MAKBUZ İNDİRME ---
+      console.log('\n📥 Adım 17: Makbuz (Receipt) PDF olarak indiriliyor...');
+      const downloadReceiptBtn = invoicePage.locator('[data-testid="download-invoice-receipt-pdf-button"]').first();
+      await downloadReceiptBtn.waitFor({ state: 'visible', timeout: PAGE_TIMEOUT });
+
+      const [receiptDownload] = await Promise.all([
+        invoicePage.waitForEvent('download', { timeout: PAGE_TIMEOUT }),
+        downloadReceiptBtn.click()
+      ]);
+
+      const receiptFileName = `${safeEmail}_makbuz_${formattedDate}.pdf`;
+      await receiptDownload.saveAs(path.join(userDir, receiptFileName));
+      console.log(`   ✅ Makbuz başarıyla indirildi: /data/openai_accounts/${sanitizedEmail}/${receiptFileName}`);
+
+      console.log('\n🎉 TÜM İŞLEMLER BAŞARIYLA TAMAMLANDI!');
 
       } catch (e) {
         console.log('   ⚠️ Fatura yönetimi / indirme sürecinde hata:', e.message);
